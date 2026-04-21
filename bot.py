@@ -72,7 +72,18 @@ def verificar_pagamento(payment_id):
     }
 
     r = requests.get(url, headers=headers)
-    return r.json().get("status")
+
+    if r.status_code != 200:
+        print("Erro API:", r.status_code, r.text)
+        return None
+
+    try:
+        data = r.json()
+    except Exception:
+        print("Resposta não é JSON:", r.text)
+        return None
+
+    return data.get("status")
 
 # ======================
 # BOT
