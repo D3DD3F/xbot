@@ -11,7 +11,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandle
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 API_KEY = os.getenv("PUSHIN_API_KEY")
 
-PUSHIN_URL = "https://api.pushinpay.com.br/api/pix/cashIn"
+BASE_URL = "https://api.pushinpay.com.br/api"
 
 # ======================
 # BANCO
@@ -24,7 +24,7 @@ cursor.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY)")
 cursor.execute("CREATE TABLE IF NOT EXISTS payments (user_id INTEGER, payment_id TEXT)")
 
 def ja_recebeu(user_id):
-    cursor.execute("SELECT * FROM users WHERE id=?", (user_id,))
+    cursor.execute("SELECT 1 FROM users WHERE id=?", (user_id,))
     return cursor.fetchone() is not None
 
 def salvar_usuario(user_id):
@@ -36,11 +36,11 @@ def salvar_pagamento(user_id, payment_id):
     conn.commit()
 
 # ======================
-# PUSHIN PIX
+# PUSHIN PAY
 # ======================
 
 def criar_pix(user_id):
-    url = "https://api.pushinpay.com.br/api/pix/cashIn"
+    url = f"{BASE_URL}/pix/cashIn"
 
     headers = {
         "Authorization": f"Bearer {API_KEY}",
@@ -54,27 +54,39 @@ def criar_pix(user_id):
         "webhook_url": "https://seusite.com/webhook"
     }
 
-    r = requests.post(url, json=payload, headers=headers)
+    try:
+        r = requests.post(url, json=payload, headers=headers, timeout=20)
+    except Exception as e:
+        print("Erro request PIX:", e)
+        return None
 
     print("STATUS:", r.status_code)
     print("BODY:", r.text)
 
-    if r.status_code != 200:
+    try:
+        data = r.json()
+    except:
         return None
 
-    return r.json()
+    return data
+
 
 def verificar_pagamento(payment_id):
-    url = f"https://api.pushinpay.com.br/api/transactions/{payment_id}"
+    url = f"{BASE_URL}/transactions/{payment_id}"
 
     headers = {
         "Authorization": f"Bearer {API_KEY}",
         "Accept": "application/json"
     }
 
-    r = requests.get(url, headers=headers)
+    try:
+        r = requests.get(url, headers=headers, timeout=20)
+    except Exception as e:
+        print("Erro request status:", e)
+        return None
 
-    print(r.status_code, r.text)
+    print("STATUS:", r.status_code)
+    print("BODY:", r.text)
 
     if r.status_code != 200:
         return None
@@ -84,7 +96,6 @@ def verificar_pagamento(payment_id):
     except:
         return None
 
-    # tenta os dois formatos comuns
     return (
         data.get("status")
         or data.get("data", {}).get("status")
@@ -102,11 +113,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
 
     await query.answer()
+
+    # ======================
+    # CRIAR PIX
+    # ======================
 
     if query.data == "comprar":
 
@@ -116,34 +132,51 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         pix = criar_pix(user_id)
 
+        if not pix:
+            await query.message.reply_text("Erro ao gerar PIX. Tente novamente.")
+            return
+
         qr = pix.get("qr_code")
         payment_id = pix.get("id")
+
+        if not qr or not payment_id:
+            await query.message.reply_text("Resposta inválida da API.")
+            return
 
         salvar_pagamento(user_id, payment_id)
 
         await query.message.reply_text(
-            f"💳 Pix gerado:\n\n{qr}",
+            f"💳 PIX gerado:\n\n{qr}",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("Já paguei", callback_data=f"check_{payment_id}")]
             ])
         )
 
+    # ======================
+    # CHECAR PAGAMENTO
+    # ======================
+
     elif query.data.startswith("check_"):
 
-        payment_id = query.data.split("_")[1]
+        payment_id = query.data.split("_", 1)[1]
+
         status = verificar_pagamento(payment_id)
 
-        if status == "paid":
+        if status is None:
+            await query.message.reply_text("Não foi possível verificar pagamento.")
+            return
+
+        if status.lower() == "paid":
             salvar_usuario(user_id)
 
             await query.message.reply_text(
-                "Pagamento confirmado!\nLINK_DO_CONTEUDO"
+                "✅ Pagamento confirmado!\n\nLINK_DO_CONTEUDO"
             )
         else:
-            await query.message.reply_text("Pagamento ainda não confirmado.")
+            await query.message.reply_text("⏳ Pagamento ainda não confirmado.")
 
 # ======================
-# EXECUTAR
+# EXECUTAR BOT
 # ======================
 
 app = ApplicationBuilder().token(TOKEN).build()
@@ -151,4 +184,5 @@ app = ApplicationBuilder().token(TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(button))
 
+print("Bot rodando...")
 app.run_polling(drop_pending_updates=True)
