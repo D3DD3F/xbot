@@ -65,25 +65,30 @@ def criar_pix(user_id):
     return r.json()
 
 def verificar_pagamento(payment_id):
-    url = f"{PUSHIN_URL}/{payment_id}"
+    url = f"https://api.pushinpay.com.br/api/transactions/{payment_id}"
 
     headers = {
-        "Authorization": f"Bearer {API_KEY}"
+        "Authorization": f"Bearer {API_KEY}",
+        "Accept": "application/json"
     }
 
     r = requests.get(url, headers=headers)
 
+    print(r.status_code, r.text)
+
     if r.status_code != 200:
-        print("Erro API:", r.status_code, r.text)
         return None
 
     try:
         data = r.json()
-    except Exception:
-        print("Resposta não é JSON:", r.text)
+    except:
         return None
 
-    return data.get("status")
+    # tenta os dois formatos comuns
+    return (
+        data.get("status")
+        or data.get("data", {}).get("status")
+    )
 
 # ======================
 # BOT
